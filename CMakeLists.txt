@@ -11,3 +11,4 @@ list(APPEND CMAKE_PREFIX_PATH "${UNITREE_SDK2_ROOT}/install/unitree_sdk2")
 find_package(unitree_sdk2 REQUIRED)
 
 add_subdirectory(audio_control)
+add_subdirectory(led_control)
