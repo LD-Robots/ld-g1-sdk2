@@ -1,5 +1,7 @@
 #include <arpa/inet.h>
+#include <errno.h>
 #include <ifaddrs.h>
+#include <net/if.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -35,7 +37,7 @@ void AsrHandler(const void* msg) {
             << res_msg->data() << std::endl;
 }
 
-std::string GetLocalIpForMulticast() {
+std::string GetInterfaceIpv4(const std::string& iface) {
   struct ifaddrs* ifaddr = nullptr;
   if (getifaddrs(&ifaddr) == -1) {
     return "";
@@ -46,6 +48,9 @@ std::string GetLocalIpForMulticast() {
     if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
       continue;
     }
+    if (iface != ifa->ifa_name) {
+      continue;
+    }
 
     char host[NI_MAXHOST] = {0};
     if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST,
@@ -53,11 +58,8 @@ std::string GetLocalIpForMulticast() {
       continue;
     }
 
-    std::string ip(host);
-    if (ip.rfind("192.168.123.", 0) == 0) {
-      result = ip;
-      break;
-    }
+    result = host;
+    break;
   }
 
   freeifaddrs(ifaddr);
@@ -97,11 +99,12 @@ void WriteWav(const std::string& path, const std::vector<int16_t>& pcm_data) {
   out.write(reinterpret_cast<const char*>(pcm_data.data()), data_size);
 }
 
-void MicRecordThread() {
+std::vector<int16_t> RecordMicPcm(const std::string& iface) {
+  std::vector<int16_t> pcm_data;
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
   if (sock < 0) {
     std::cout << "Failed to create UDP socket." << std::endl;
-    return;
+    return pcm_data;
   }
 
   sockaddr_in local_addr{};
@@ -112,31 +115,44 @@ void MicRecordThread() {
            sizeof(local_addr)) < 0) {
     std::cout << "Failed to bind UDP socket." << std::endl;
     close(sock);
-    return;
+    return pcm_data;
   }
 
-  ip_mreq mreq{};
+  ip_mreqn mreq{};
   if (inet_pton(AF_INET, kGroupIp, &mreq.imr_multiaddr) != 1) {
     std::cout << "Failed to parse multicast IP." << std::endl;
     close(sock);
-    return;
+    return pcm_data;
   }
 
-  std::string local_ip = GetLocalIpForMulticast();
+  std::string local_ip = GetInterfaceIpv4(iface);
   std::cout << "local ip: " << local_ip << std::endl;
   if (local_ip.empty()) {
-    std::cout << "No local IP in 192.168.123.x found for multicast."
-              << std::endl;
+    std::cout << "No IPv4 found for interface " << iface << "." << std::endl;
     close(sock);
-    return;
+    return pcm_data;
   }
 
-  mreq.imr_interface.s_addr = inet_addr(local_ip.c_str());
+  mreq.imr_address.s_addr = inet_addr(local_ip.c_str());
+  mreq.imr_ifindex = if_nametoindex(iface.c_str());
+  if (mreq.imr_ifindex == 0) {
+    std::cout << "Failed to resolve interface index for " << iface << "."
+              << std::endl;
+    close(sock);
+    return pcm_data;
+  }
+
+  if (setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, &mreq,
+                 sizeof(mreq)) < 0) {
+    std::cout << "Failed to set multicast interface: errno=" << errno
+              << std::endl;
+  }
   if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq,
                  sizeof(mreq)) < 0) {
-    std::cout << "Failed to join multicast group." << std::endl;
+    std::cout << "Failed to join multicast group: errno=" << errno
+              << std::endl;
     close(sock);
-    return;
+    return pcm_data;
   }
 
   timeval timeout{};
@@ -148,7 +164,6 @@ void MicRecordThread() {
   }
 
   int total_bytes = 0;
-  std::vector<int16_t> pcm_data;
   pcm_data.reserve(kWavLen / 2);
   std::cout << "start record! max 10 seconds" << std::endl;
   int64_t start_ms = unitree::common::GetCurrentTimeMillisecond();
@@ -168,17 +183,13 @@ void MicRecordThread() {
       std::cout << "recorded bytes: " << total_bytes << "/" << kWavLen
                 << std::endl;
     } else {
-      std::cout << "recording... no data yet" << std::endl;
+      std::cout << "recording... no data yet (errno=" << errno << ")"
+                << std::endl;
     }
   }
 
-  if (pcm_data.empty()) {
-    std::cout << "record finish! no audio captured." << std::endl;
-  } else {
-    WriteWav("record.wav", pcm_data);
-    std::cout << "record finish! save to record.wav" << std::endl;
-  }
   close(sock);
+  return pcm_data;
 }
 }  // namespace
 
@@ -195,22 +206,43 @@ int main(int argc, char const* argv[]) {
   client.Init();
   client.SetTimeout(10.0f);
 
-  unitree::robot::ChannelSubscriber<std_msgs::msg::dds_::String_> subscriber(
-      kAudioSubscribeTopic);
-  subscriber.InitChannel(AsrHandler);
+  uint8_t volume = 0;
+  int32_t volume_ret = client.GetVolume(volume);
+  std::cout << "GetVolume API ret: " << volume_ret
+            << " volume: " << static_cast<int>(volume) << std::endl;
 
   std::cout << "Press Enter, then speak to the robot microphone." << std::endl;
   std::string line;
   std::getline(std::cin, line);
 
-  std::cout << "AudioClient ASR example running. Waiting for ASR messages..."
-            << std::endl;
+  std::cout << "Test 1: receive microphone audio (no ASR)..." << std::endl;
 
-  std::thread mic_thread(MicRecordThread);
+  std::vector<int16_t> pcm_data = RecordMicPcm(argv[1]);
+  if (pcm_data.empty()) {
+    std::cout << "record finish! no audio captured." << std::endl;
+  } else {
+    WriteWav("record.wav", pcm_data);
+    std::cout << "record finish! save to record.wav" << std::endl;
+  }
 
-  mic_thread.join();
-  std::cout << "Recording complete. Waiting briefly for ASR messages..."
-            << std::endl;
-  sleep(3);
+  if (!pcm_data.empty()) {
+    std::vector<uint8_t> pcm_bytes(
+        reinterpret_cast<uint8_t*>(pcm_data.data()),
+        reinterpret_cast<uint8_t*>(pcm_data.data()) +
+            pcm_data.size() * sizeof(int16_t));
+    std::string stream_id =
+        std::to_string(unitree::common::GetCurrentTimeMillisecond());
+    std::cout << "Test 1b: play recorded audio back via PlayStream..."
+              << std::endl;
+    int32_t play_ret = client.PlayStream("mic_test", stream_id, pcm_bytes);
+    std::cout << "PlayStream API ret: " << play_ret << std::endl;
+    client.PlayStop(stream_id);
+  }
+
+  std::cout << "Test 2: ASR messages (if available)..." << std::endl;
+  unitree::robot::ChannelSubscriber<std_msgs::msg::dds_::String_> subscriber(
+      kAudioSubscribeTopic);
+  subscriber.InitChannel(AsrHandler);
+  sleep(5);
   return 0;
 }
