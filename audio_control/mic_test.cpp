@@ -139,11 +139,25 @@ void MicRecordThread() {
     return;
   }
 
+  timeval timeout{};
+  timeout.tv_sec = 1;
+  timeout.tv_usec = 0;
+  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) <
+      0) {
+    std::cout << "Failed to set socket timeout." << std::endl;
+  }
+
   int total_bytes = 0;
   std::vector<int16_t> pcm_data;
   pcm_data.reserve(kWavLen / 2);
-  std::cout << "start record!" << std::endl;
+  std::cout << "start record! max 10 seconds" << std::endl;
+  int64_t start_ms = unitree::common::GetCurrentTimeMillisecond();
   while (total_bytes < kWavLen) {
+    int64_t now_ms = unitree::common::GetCurrentTimeMillisecond();
+    if (now_ms - start_ms >= 10000) {
+      std::cout << "record timeout after 10 seconds." << std::endl;
+      break;
+    }
     char buffer[kWavLenOnce];
     ssize_t len = recvfrom(sock, buffer, sizeof(buffer), 0, nullptr, nullptr);
     if (len > 0) {
@@ -153,11 +167,17 @@ void MicRecordThread() {
       total_bytes += static_cast<int>(len);
       std::cout << "recorded bytes: " << total_bytes << "/" << kWavLen
                 << std::endl;
+    } else {
+      std::cout << "recording... no data yet" << std::endl;
     }
   }
 
-  WriteWav("record.wav", pcm_data);
-  std::cout << "record finish! save to record.wav" << std::endl;
+  if (pcm_data.empty()) {
+    std::cout << "record finish! no audio captured." << std::endl;
+  } else {
+    WriteWav("record.wav", pcm_data);
+    std::cout << "record finish! save to record.wav" << std::endl;
+  }
   close(sock);
 }
 }  // namespace
@@ -188,10 +208,9 @@ int main(int argc, char const* argv[]) {
 
   std::thread mic_thread(MicRecordThread);
 
-  while (true) {
-    sleep(1);
-  }
-
   mic_thread.join();
+  std::cout << "Recording complete. Waiting briefly for ASR messages..."
+            << std::endl;
+  sleep(3);
   return 0;
 }
