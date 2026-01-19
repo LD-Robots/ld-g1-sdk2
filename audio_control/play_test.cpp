@@ -14,8 +14,6 @@
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
 
 namespace {
-constexpr const char* kDefaultWavPath =
-    "/home/alex/Documents/GitHub/ld-g1-sdk2/data/audio_control/input.wav";
 constexpr size_t kChunkSize = 96000;
 volatile std::sig_atomic_t g_stop_requested = 0;
 
@@ -162,16 +160,13 @@ bool ReadWavFile(const std::string& path, WavInfo* info) {
 }  // namespace
 
 int main(int argc, char const* argv[]) {
-  if (argc < 2) {
+  if (argc < 3) {
     std::cout << "Usage: g1_audio_play_test [NetWorkInterface(eth0)] [wav_path]"
               << std::endl;
     return 1;
   }
 
-  std::string wav_path = kDefaultWavPath;
-  if (argc >= 3) {
-    wav_path = argv[2];
-  }
+  std::string wav_path = argv[2];
 
   WavInfo info;
   if (!ReadWavFile(wav_path, &info)) {
