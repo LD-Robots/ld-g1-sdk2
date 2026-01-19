@@ -1,6 +1,7 @@
 #include <iostream>
 #include <string>
 
+#include <unitree/common/time/time_tool.hpp>
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
 
@@ -29,15 +30,28 @@ int main(int argc, char const* argv[]) {
 
   AudioMicClient client;
   client.Init();
-  client.SetTimeout(10.0f);
+  client.SetTimeout(30.0f);
+
+  std::cout << "Voice service api version: " << client.GetServerApiVersion()
+            << std::endl;
 
   std::cout << "Press Enter, then speak to the robot microphone." << std::endl;
   std::string line;
   std::getline(std::cin, line);
 
   std::string asr_result;
-  int32_t ret = client.AsrOnce(asr_result);
-  std::cout << "ASR API ret: " << ret << std::endl;
+  int32_t ret = -1;
+  const int kMaxAttempts = 3;
+  for (int attempt = 1; attempt <= kMaxAttempts; ++attempt) {
+    std::cout << "ASR attempt " << attempt << "/" << kMaxAttempts << "..."
+              << std::endl;
+    ret = client.AsrOnce(asr_result);
+    std::cout << "ASR API ret: " << ret << std::endl;
+    if (ret == 0) {
+      break;
+    }
+    unitree::common::Sleep(1);
+  }
   std::cout << "ASR raw data: " << asr_result << std::endl;
 
   return ret == 0 ? 0 : 1;
