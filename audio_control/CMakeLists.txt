@@ -1,3 +1,7 @@
 add_executable(g1_audio_tts_test tts_test.cpp)
 target_compile_features(g1_audio_tts_test PRIVATE cxx_std_17)
 target_link_libraries(g1_audio_tts_test unitree_sdk2)
+
+add_executable(g1_audio_mic_test mic_test.cpp)
+target_compile_features(g1_audio_mic_test PRIVATE cxx_std_17)
+target_link_libraries(g1_audio_mic_test unitree_sdk2)
