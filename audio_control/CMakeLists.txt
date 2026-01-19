@@ -9,3 +9,7 @@ target_link_libraries(g1_audio_mic_test unitree_sdk2)
 add_executable(g1_audio_play_test play_test.cpp)
 target_compile_features(g1_audio_play_test PRIVATE cxx_std_17)
 target_link_libraries(g1_audio_play_test unitree_sdk2)
+
+add_executable(g1_asr_arm_action asr_arm_action.cpp)
+target_compile_features(g1_asr_arm_action PRIVATE cxx_std_17)
+target_link_libraries(g1_asr_arm_action unitree_sdk2)
