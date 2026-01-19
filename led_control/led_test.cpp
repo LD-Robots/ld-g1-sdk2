@@ -38,5 +38,26 @@ int main(int argc, char const* argv[]) {
   ret = client.LedControl(0, 0, 0);
   std::cout << "LedControl off ret: " << ret << std::endl;
 
+  int R = 0, G = 0, B = 0;
+
+  for (;B<255;B+=2) {
+      std::cout << "LedControl Fade In Blue[" << R << "," << G << "," << B << "] " << ret << std::endl;
+      ret = client.LedControl(R, G, B);
+      unitree::common::MilliSleep(50);
+  }
+  B = 0;
+  for (;G<255;G+=2) {
+      std::cout << "LedControl Fade In Green[" << R << "," << G << "," << B << "] " << ret << std::endl;
+      ret = client.LedControl(R, G, B);
+      unitree::common::MilliSleep(50);
+  }
+  G = 0;
+  for (;R<255;R+=2) {
+      std::cout << "LedControl Fade In Red[" << R << "," << G << "," << B << "] " << ret << std::endl;
+      ret = client.LedControl(R, G, B);
+      unitree::common::MilliSleep(50);
+  }
+
+  ret = client.LedControl(0, 0, 0);
   return ret == 0 ? 0 : 1;
 }
