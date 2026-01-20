@@ -64,7 +64,8 @@ std::string g_openai_model = "gpt-4o-mini";
 std::string g_system_prompt =
     "You are a friendly robot assistant named G1. You are helpful, concise, "
     "and speak naturally. Keep responses brief (1-2 sentences) since they "
-    "will be spoken aloud. Be conversational and engaging.";
+    "will be spoken aloud. Be conversational and engaging. "
+    "When web search results are provided, use them to give accurate answers.";
 
 std::string EscapeJson(const std::string& input) {
   std::string output;
@@ -199,9 +200,132 @@ size_t CurlWriteCallback(void* contents, size_t size, size_t nmemb,
   return total_size;
 }
 
+std::string UrlEncode(const std::string& input) {
+  CURL* curl = curl_easy_init();
+  if (!curl) return input;
+  char* encoded = curl_easy_escape(curl, input.c_str(), input.length());
+  std::string result = encoded ? encoded : input;
+  if (encoded) curl_free(encoded);
+  curl_easy_cleanup(curl);
+  return result;
+}
+
+std::string ExtractJsonField(const std::string& json, const std::string& field) {
+  std::string marker = "\"" + field + "\":";
+  size_t pos = json.find(marker);
+  if (pos == std::string::npos) return "";
+
+  pos += marker.size();
+  while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t')) ++pos;
+
+  if (pos >= json.size() || json[pos] != '"') return "";
+  ++pos;
+
+  std::string content;
+  while (pos < json.size()) {
+    char ch = json[pos];
+    if (ch == '"') break;
+    if (ch == '\\' && pos + 1 < json.size()) {
+      char next = json[pos + 1];
+      if (next == '"') content += '"';
+      else if (next == 'n') content += ' ';
+      else if (next == '\\') content += '\\';
+      else content += next;
+      pos += 2;
+      continue;
+    }
+    content += ch;
+    ++pos;
+  }
+  return content;
+}
+
+std::string SearchDuckDuckGo(const std::string& query) {
+  std::string url = "https://api.duckduckgo.com/?q=" + UrlEncode(query) +
+                    "&format=json&no_html=1&skip_disambig=1";
+
+  CURL* curl = curl_easy_init();
+  if (!curl) return "";
+
+  std::string response;
+  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_USERAGENT, "G1-Robot/1.0");
+
+  CURLcode res = curl_easy_perform(curl);
+  curl_easy_cleanup(curl);
+
+  if (res != CURLE_OK) {
+    std::cout << "[Search failed: " << curl_easy_strerror(res) << "]" << std::endl;
+    return "";
+  }
+
+  std::string result;
+
+  // Try Abstract first (Wikipedia-style answer)
+  std::string abstract = ExtractJsonField(response, "Abstract");
+  if (!abstract.empty()) {
+    result += abstract;
+  }
+
+  // Try Answer (instant answer)
+  std::string answer = ExtractJsonField(response, "Answer");
+  if (!answer.empty()) {
+    if (!result.empty()) result += " ";
+    result += answer;
+  }
+
+  // Try Definition
+  if (result.empty()) {
+    std::string definition = ExtractJsonField(response, "Definition");
+    if (!definition.empty()) {
+      result = definition;
+    }
+  }
+
+  if (result.empty()) {
+    std::cout << "[No search results found]" << std::endl;
+  } else {
+    std::cout << "[Search result]: " << result.substr(0, 100) << "..." << std::endl;
+  }
+
+  return result;
+}
+
+bool ShouldSearch(const std::string& text) {
+  std::string lower = text;
+  for (char& c : lower) c = std::tolower(c);
+
+  // Keywords that suggest a search is needed
+  const std::vector<std::string> search_triggers = {
+    "what is", "who is", "where is", "when is", "how to",
+    "define", "search for", "look up", "find out",
+    "tell me about", "what are", "who are", "explain",
+    "what does", "what do", "how does", "how do",
+    "why is", "why are", "why do", "why does"
+  };
+
+  for (const auto& trigger : search_triggers) {
+    if (lower.find(trigger) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::string CallOpenAI(const std::string& user_message) {
   if (g_openai_api_key.empty()) {
     return "Error: OpenAI API key not set.";
+  }
+
+  // Check if we should search the web
+  std::string search_context;
+  if (ShouldSearch(user_message)) {
+    std::cout << "[Searching the web...]" << std::endl;
+    search_context = SearchDuckDuckGo(user_message);
   }
 
   std::vector<ChatMessage> messages;
@@ -213,7 +337,13 @@ std::string CallOpenAI(const std::string& user_message) {
       messages.push_back(msg);
     }
   }
-  messages.push_back({"user", user_message});
+
+  // Add search results to user message if available
+  std::string augmented_message = user_message;
+  if (!search_context.empty()) {
+    augmented_message = user_message + "\n\n[Web search results]: " + search_context;
+  }
+  messages.push_back({"user", augmented_message});
 
   std::string messages_json = BuildMessagesJson(messages);
   std::ostringstream body;
