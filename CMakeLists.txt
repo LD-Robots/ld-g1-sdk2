@@ -30,3 +30,4 @@ add_dependencies(rnnoise rnnoise_build)
 
 add_subdirectory(audio_control)
 add_subdirectory(led_control)
+add_subdirectory(conversational)
