@@ -1,6 +1,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -18,12 +19,15 @@ constexpr const char* kPrefix = "execute ";
 constexpr int kMicSampleRate = 16000;
 constexpr int kMicChannels = 1;
 constexpr int kMicBitsPerSample = 16;
-constexpr int kMicRecordSeconds = 5;
+constexpr int kMicChunkSeconds = 1;
+constexpr int kMicMaxRecordSeconds = 8;
+constexpr int kMicSilenceStopMs = 1200;
+constexpr int kMicStartRmsThreshold = 300;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
 constexpr const char* kDefaultModelPath = WHISPER_MODEL_PATH;
-constexpr const char* kLocalMicTestPcm = "/tmp/whisper_mic_test.pcm";
+constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
 
 unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
@@ -223,6 +227,19 @@ std::vector<int16_t> ReadRawPcm(const std::string& path) {
   return data;
 }
 
+int ComputeRms(const std::vector<int16_t>& pcm) {
+  if (pcm.empty()) {
+    return 0;
+  }
+  double sum_sq = 0.0;
+  for (int16_t sample : pcm) {
+    double v = static_cast<double>(sample);
+    sum_sq += v * v;
+  }
+  double rms = std::sqrt(sum_sq / pcm.size());
+  return static_cast<int>(rms);
+}
+
 std::string RunCommand(const std::string& cmd) {
   std::string output;
   FILE* pipe = popen(cmd.c_str(), "r");
@@ -237,20 +254,55 @@ std::string RunCommand(const std::string& cmd) {
   return output;
 }
 
-std::vector<int16_t> RecordLocalMicPcm(int seconds) {
+std::vector<int16_t> RecordLocalMicPcmDynamic() {
   std::cout << "Local mic: using arecord default device." << std::endl;
   std::cout.flush();
-  std::string cmd = std::string("arecord -q -f S16_LE -r 16000 -c 1 -d ") +
-                    std::to_string(seconds) + " -t raw " + kLocalMicTestPcm;
-  std::cout << "Local mic: command: " << cmd << std::endl;
-  int ret = std::system(cmd.c_str());
-  if (ret != 0) {
-    std::cout << "arecord failed, ret=" << ret << std::endl;
+  std::vector<int16_t> result;
+  bool started = false;
+  int silence_ms = 0;
+  int captured_ms = 0;
+
+  while (captured_ms < kMicMaxRecordSeconds * 1000) {
+    std::string cmd =
+        std::string("arecord -q -f S16_LE -r 16000 -c 1 -d ") +
+        std::to_string(kMicChunkSeconds) + " -t raw " + kLocalMicChunkPcm;
+    int ret = std::system(cmd.c_str());
+    if (ret != 0) {
+      std::cout << "arecord failed, ret=" << ret << std::endl;
+      break;
+    }
+    std::vector<int16_t> chunk = ReadRawPcm(kLocalMicChunkPcm);
+    std::remove(kLocalMicChunkPcm);
+    if (chunk.empty()) {
+      break;
+    }
+
+    int rms = ComputeRms(chunk);
+    if (!started) {
+      if (rms >= kMicStartRmsThreshold) {
+        started = true;
+        result.insert(result.end(), chunk.begin(), chunk.end());
+      }
+    } else {
+      result.insert(result.end(), chunk.begin(), chunk.end());
+      if (rms < kMicStartRmsThreshold) {
+        silence_ms += kMicChunkSeconds * 1000;
+      } else {
+        silence_ms = 0;
+      }
+      if (silence_ms >= kMicSilenceStopMs) {
+        break;
+      }
+    }
+    captured_ms += kMicChunkSeconds * 1000;
+  }
+
+  if (!started) {
     return {};
   }
-  std::vector<int16_t> data = ReadRawPcm(kLocalMicTestPcm);
-  std::remove(kLocalMicTestPcm);
-  return data;
+
+  WriteWav("record.wav", result);
+  return result;
 }
 }  // namespace
 
@@ -308,12 +360,11 @@ int main(int argc, char const* argv[]) {
 
   while (true) {
     std::cout << "Capture loop start." << std::endl;
-    std::vector<int16_t> pcm_data = RecordLocalMicPcm(kMicRecordSeconds);
+    std::vector<int16_t> pcm_data = RecordLocalMicPcmDynamic();
     if (pcm_data.empty()) {
       unitree::common::Sleep(1);
       continue;
     }
-    WriteWav("record.wav", pcm_data);
     std::string transcript = TranscribeWithWhisper(pcm_data);
     if (transcript.empty()) {
       std::cout << "Whisper text: <empty>" << std::endl;
