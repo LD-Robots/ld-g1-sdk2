@@ -81,15 +81,6 @@ std::string TrimPunctuation(const std::string& input) {
   return input.substr(0, end);
 }
 
-bool IsCommandCandidate(const std::string& normalized) {
-  return normalized.find("execute ") != std::string::npos ||
-         normalized.find("hug") != std::string::npos ||
-         normalized.find("throw money") != std::string::npos ||
-         normalized.find("scratch head") != std::string::npos ||
-         normalized.find("stop") != std::string::npos ||
-         normalized.find("i miss you") != std::string::npos;
-}
-
 void ProcessCommandText(const std::string& text) {
   if (g_client == nullptr) {
     return;
@@ -138,6 +129,7 @@ void ProcessCommandText(const std::string& text) {
   }
 
   if (normalized.rfind(kPrefix, 0) != 0) {
+    std::cout << "Command ignored: " << text << std::endl;
     return;
   }
 
@@ -157,6 +149,15 @@ void ProcessCommandText(const std::string& text) {
   }
   std::cout << "Command: \"" << action_name << "\" ret=" << ret
             << std::endl;
+  return;
+}
+
+void MaybeProcessCommand(const std::string& transcript, bool is_test) {
+  if (is_test) {
+    std::cout << "Command ignored (TEST): " << transcript << std::endl;
+    return;
+  }
+  ProcessCommandText(transcript);
 }
 
 std::string TranscribeWithWhisper(const std::vector<int16_t>& pcm_data) {
@@ -494,15 +495,7 @@ int main(int argc, char const* argv[]) {
       std::cout << "Whisper text: <empty>" << std::endl;
       continue;
     }
-    std::string normalized = Normalize(transcript);
-    normalized = TrimPunctuation(normalized);
-    if (!IsCommandCandidate(normalized)) {
-      std::cout << "Whisper text ignored: " << transcript << std::endl;
-      continue;
-    }
     std::cout << "Whisper text: " << transcript << std::endl;
-    if (!is_test) {
-      ProcessCommandText(transcript);
-    }
+    MaybeProcessCommand(transcript, is_test);
   }
 }
