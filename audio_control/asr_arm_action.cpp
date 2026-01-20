@@ -1,45 +1,24 @@
-#include <algorithm>
-#include <atomic>
-#include <cerrno>
 #include <cctype>
 #include <cstdio>
-#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <string>
-#include <thread>
 #include <vector>
-
-#include <arpa/inet.h>
-#include <ifaddrs.h>
-#include <net/if.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <unitree/common/time/time_tool.hpp>
 #include <unitree/robot/channel/channel_factory.hpp>
-#include <unitree/robot/channel/channel_subscriber.hpp>
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
 #include <unitree/robot/g1/arm/g1_arm_action_client.hpp>
-#include <unitree/idl/hg/SportModeState_.hpp>
 #include <whisper.h>
 
 namespace {
 constexpr const char* kPrefix = "execute ";
-constexpr const char* kMicGroupIp = "239.168.123.161";
-constexpr int kMicPort = 5555;
 constexpr int kMicSampleRate = 16000;
 constexpr int kMicChannels = 1;
 constexpr int kMicBitsPerSample = 16;
 constexpr int kMicRecordSeconds = 5;
-constexpr int kMicBytesPerSample = kMicBitsPerSample / 8;
-constexpr int kMicWavLen =
-    kMicSampleRate * kMicChannels * kMicBytesPerSample * kMicRecordSeconds;
-constexpr int kMicWavLenOnce =
-    kMicSampleRate * kMicChannels * kMicBytesPerSample * 160 / 1000;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
@@ -48,10 +27,6 @@ constexpr const char* kLocalMicTestPcm = "/tmp/whisper_mic_test.pcm";
 
 unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
-std::atomic<uint64_t> g_last_mic_ms(0);
-std::atomic<uint64_t> g_last_whisper_ms(0);
-std::atomic<uint32_t> g_fsm_id(0);
-std::atomic<uint32_t> g_fsm_mode(0);
 whisper_context* g_whisper_ctx = nullptr;
 
 std::string Normalize(const std::string& input) {
@@ -95,11 +70,21 @@ void ProcessCommandText(const std::string& text) {
   }
   std::string normalized = Normalize(text);
   normalized = TrimPunctuation(normalized);
+
+  if (normalized == "stop" || normalized == "stop action" ||
+      normalized == "stop actions") {
+    std::cout << "Command: \"stop\"" << std::endl;
+    g_client->StopCustomAction();
+    g_client->ExecuteAction(99);
+    return;
+  }
+
   if (normalized == "give me a hug" || normalized == "give me a hug please") {
     int32_t ret = g_client->ExecuteAction(19);
     std::cout << "Command: \"hug\" ret=" << ret << std::endl;
     return;
   }
+
   if (normalized.find("i miss you") != std::string::npos) {
     std::cout << "TTS: \"come here to give you a hug\"" << std::endl;
     if (g_audio_client != nullptr) {
@@ -110,22 +95,26 @@ void ProcessCommandText(const std::string& text) {
     std::cout << "Command: \"hug\" ret=" << ret << std::endl;
     return;
   }
+
   if (normalized.find("throw money") != std::string::npos ||
       normalized.find("throw the money") != std::string::npos ||
       normalized.find("trow money") != std::string::npos ||
       normalized.find("trow the money") != std::string::npos) {
-    int32_t ret = g_client->ExecuteAction("Throw_money");
+    int32_t ret = g_client->ExecuteAction("throw_money");
     std::cout << "Command: \"throw_money\" ret=" << ret << std::endl;
     return;
   }
+
   if (normalized == "scratch head" || normalized == "scratch my head") {
     int32_t ret = g_client->ExecuteAction("scratch_head");
     std::cout << "Command: \"scratch_head\" ret=" << ret << std::endl;
     return;
   }
+
   if (normalized.rfind(kPrefix, 0) != 0) {
     return;
   }
+
   std::string action_name = normalized.substr(std::strlen(kPrefix));
   action_name = TrimPunctuation(action_name);
   if (action_name.empty()) {
@@ -250,6 +239,7 @@ std::string RunCommand(const std::string& cmd) {
 
 std::vector<int16_t> RecordLocalMicPcm(int seconds) {
   std::cout << "Local mic: using arecord default device." << std::endl;
+  std::cout.flush();
   std::string cmd = std::string("arecord -q -f S16_LE -r 16000 -c 1 -d ") +
                     std::to_string(seconds) + " -t raw " + kLocalMicTestPcm;
   std::cout << "Local mic: command: " << cmd << std::endl;
@@ -262,161 +252,13 @@ std::vector<int16_t> RecordLocalMicPcm(int seconds) {
   std::remove(kLocalMicTestPcm);
   return data;
 }
-
-std::string GetInterfaceIpv4(const std::string& iface) {
-  struct ifaddrs* ifaddr = nullptr;
-  if (getifaddrs(&ifaddr) == -1) {
-    return "";
-  }
-
-  std::string result;
-  for (struct ifaddrs* ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
-    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) {
-      continue;
-    }
-    if (iface != ifa->ifa_name) {
-      continue;
-    }
-
-    char host[NI_MAXHOST] = {0};
-    if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in), host, NI_MAXHOST,
-                    nullptr, 0, NI_NUMERICHOST) != 0) {
-      continue;
-    }
-
-    result = host;
-    break;
-  }
-
-  freeifaddrs(ifaddr);
-  return result;
-}
-
-void MicListenThread(const std::string& iface) {
-  std::cout << "Mic listen: thread started on interface " << iface << "."
-            << std::endl;
-  int sock = socket(AF_INET, SOCK_DGRAM, 0);
-  if (sock < 0) {
-    std::cout << "Mic listen: failed to create UDP socket." << std::endl;
-    return;
-  }
-
-  sockaddr_in local_addr{};
-  local_addr.sin_family = AF_INET;
-  local_addr.sin_port = htons(kMicPort);
-  local_addr.sin_addr.s_addr = INADDR_ANY;
-  if (bind(sock, reinterpret_cast<sockaddr*>(&local_addr),
-           sizeof(local_addr)) < 0) {
-    std::cout << "Mic listen: failed to bind UDP socket." << std::endl;
-    close(sock);
-    return;
-  }
-
-  ip_mreqn mreq{};
-  if (inet_pton(AF_INET, kMicGroupIp, &mreq.imr_multiaddr) != 1) {
-    std::cout << "Mic listen: failed to parse multicast IP." << std::endl;
-    close(sock);
-    return;
-  }
-
-  std::string local_ip = GetInterfaceIpv4(iface);
-  std::cout << "Mic listen local ip: " << local_ip << std::endl;
-  if (local_ip.empty()) {
-    std::cout << "Mic listen: no IPv4 for interface " << iface << "."
-              << std::endl;
-    close(sock);
-    return;
-  }
-
-  mreq.imr_address.s_addr = inet_addr(local_ip.c_str());
-  mreq.imr_ifindex = if_nametoindex(iface.c_str());
-  if (mreq.imr_ifindex == 0) {
-    std::cout << "Mic listen: failed to resolve interface index for " << iface
-              << "." << std::endl;
-    close(sock);
-    return;
-  }
-
-  if (setsockopt(sock, IPPROTO_IP, IP_MULTICAST_IF, &mreq,
-                 sizeof(mreq)) < 0) {
-    std::cout << "Mic listen: failed to set multicast interface." << std::endl;
-  }
-  if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq,
-                 sizeof(mreq)) < 0) {
-    std::cout << "Mic listen: failed to join multicast group." << std::endl;
-    close(sock);
-    return;
-  }
-
-  timeval timeout{};
-  timeout.tv_sec = 1;
-  timeout.tv_usec = 0;
-  if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) <
-      0) {
-    std::cout << "Mic listen: failed to set socket timeout." << std::endl;
-  }
-
-  const size_t target_samples =
-      static_cast<size_t>(kMicWavLen / sizeof(int16_t));
-  std::vector<int16_t> pcm_data;
-  pcm_data.reserve(target_samples);
-
-  char buffer[kMicWavLenOnce];
-  int total_bytes = 0;
-  uint64_t last_no_data_ms = 0;
-  while (true) {
-    ssize_t len = recvfrom(sock, buffer, sizeof(buffer), 0, nullptr, nullptr);
-    if (len > 0) {
-      g_last_mic_ms.store(unitree::common::GetCurrentTimeMillisecond());
-      size_t sample_count = static_cast<size_t>(len) / sizeof(int16_t);
-      const int16_t* samples =
-          reinterpret_cast<const int16_t*>(buffer);
-      pcm_data.insert(pcm_data.end(), samples, samples + sample_count);
-      total_bytes += static_cast<int>(len);
-      if (total_bytes >= kMicWavLen) {
-        WriteWav("record.wav", pcm_data);
-        std::cout << "Mic listen: saved record.wav (" << kMicRecordSeconds
-                  << "s)" << std::endl;
-        std::string transcript = TranscribeWithWhisper(pcm_data);
-        if (!transcript.empty()) {
-          std::cout << "Whisper text: " << transcript << std::endl;
-          ProcessCommandText(transcript);
-          g_last_whisper_ms.store(
-              unitree::common::GetCurrentTimeMillisecond());
-        }
-        pcm_data.clear();
-        pcm_data.shrink_to_fit();
-        pcm_data.reserve(target_samples);
-        total_bytes = 0;
-      }
-    } else {
-      uint64_t now_ms = unitree::common::GetCurrentTimeMillisecond();
-      if (last_no_data_ms == 0 || now_ms - last_no_data_ms > 5000) {
-        std::cout << "Mic listen: no data yet (errno=" << errno << ")"
-                  << std::endl;
-        last_no_data_ms = now_ms;
-      }
-    }
-  }
-}
-
-void SportModeHandler(const void* msg) {
-  auto* state = (unitree_hg::msg::dds_::SportModeState_*)msg;
-  uint32_t new_id = state->fsm_id();
-  uint32_t new_mode = state->fsm_mode();
-  uint32_t old_id = g_fsm_id.exchange(new_id);
-  uint32_t old_mode = g_fsm_mode.exchange(new_mode);
-  if (new_id != old_id || new_mode != old_mode) {
-    std::cout << "FSM state: id=" << new_id << " mode=" << new_mode
-              << std::endl;
-  }
-}
 }  // namespace
 
 int main(int argc, char const* argv[]) {
   if (argc < 2) {
-    std::cout << "Usage: g1_asr_arm_action [NetWorkInterface(eth0)|TEST] [model_path]"
-              << std::endl;
+    std::cout
+        << "Usage: g1_asr_arm_action [NetWorkInterface(eth0)|TEST] [model_path]"
+        << std::endl;
     return 1;
   }
 
@@ -425,70 +267,61 @@ int main(int argc, char const* argv[]) {
     model_path = argv[2];
   }
 
-  if (std::string(argv[1]) == "TEST") {
-    g_whisper_ctx = whisper_init_from_file(model_path.c_str());
-    if (g_whisper_ctx == nullptr) {
-      std::cout << "Failed to load Whisper model: " << model_path << std::endl;
-      return 1;
-    }
-    std::cout << "Whisper model loaded: " << model_path << std::endl;
-    std::cout << "Local mic devices:\n"
-              << RunCommand("arecord -l 2>&1") << std::endl;
-    std::cout << "Recording local mic for " << kMicRecordSeconds
-              << " seconds..." << std::endl;
-    std::vector<int16_t> pcm_data = RecordLocalMicPcm(kMicRecordSeconds);
-    if (pcm_data.empty()) {
-      std::cout << "No local mic data captured." << std::endl;
-      return 1;
-    }
-    std::string transcript = TranscribeWithWhisper(pcm_data);
-    std::cout << "Whisper text: " << transcript << std::endl;
-    return 0;
-  }
-
-  unitree::robot::ChannelFactory::Instance()->Init(0, argv[1]);
-
-  unitree::robot::g1::G1ArmActionClient client;
-  client.Init();
-  client.SetTimeout(10.0f);
-  g_client = &client;
-
-  unitree::robot::g1::AudioClient audio_client;
-  audio_client.Init();
-  audio_client.SetTimeout(10.0f);
-  g_audio_client = &audio_client;
-
-  g_whisper_ctx = whisper_init_from_file(model_path.c_str());
+  whisper_context_params wparams = whisper_context_default_params();
+  wparams.use_gpu = false;
+  wparams.flash_attn = false;
+  g_whisper_ctx = whisper_init_from_file_with_params(model_path.c_str(),
+                                                     wparams);
   if (g_whisper_ctx == nullptr) {
     std::cout << "Failed to load Whisper model: " << model_path << std::endl;
     return 1;
   }
   std::cout << "Whisper model loaded: " << model_path << std::endl;
-  std::cout << "Listening for Whisper commands. Say: execute <action_name>"
-            << std::endl;
 
-  unitree::robot::ChannelSubscriber<unitree_hg::msg::dds_::SportModeState_>
-      fsm_subscriber("rt/sportmodestate");
-  fsm_subscriber.InitChannel(SportModeHandler);
-
-  std::thread mic_thread(MicListenThread, std::string(argv[1]));
-  mic_thread.detach();
-
-  while (true) {
-    sleep(1);
-    uint64_t now_ms = unitree::common::GetCurrentTimeMillisecond();
-    uint64_t last_mic = g_last_mic_ms.load();
-    if (last_mic == 0 || now_ms - last_mic > 5000) {
-      std::cout << "Waiting for mic stream on " << kMicGroupIp << ":"
-                << kMicPort << "..." << std::endl;
-      g_last_mic_ms.store(now_ms);
-    }
-    uint64_t last_whisper = g_last_whisper_ms.load();
-    if (last_whisper == 0 || now_ms - last_whisper > 5000) {
-      std::cout << "Waiting for Whisper transcription..." << std::endl;
-      g_last_whisper_ms.store(now_ms);
-    }
+  const bool is_test = (std::string(argv[1]) == "TEST");
+  if (is_test) {
+    std::cout << "Local mic devices:\n"
+              << RunCommand("arecord -l 2>&1") << std::endl;
+  } else {
+    unitree::robot::ChannelFactory::Instance()->Init(0, argv[1]);
   }
 
-  return 0;
+  std::unique_ptr<unitree::robot::g1::G1ArmActionClient> client;
+  std::unique_ptr<unitree::robot::g1::AudioClient> audio_client;
+  if (!is_test) {
+    client = std::make_unique<unitree::robot::g1::G1ArmActionClient>();
+    client->Init();
+    client->SetTimeout(10.0f);
+    g_client = client.get();
+
+    audio_client = std::make_unique<unitree::robot::g1::AudioClient>();
+    audio_client->Init();
+    audio_client->SetTimeout(10.0f);
+    g_audio_client = audio_client.get();
+
+    std::cout << "Listening for Whisper commands. Say: execute <action_name>"
+              << std::endl;
+  } else {
+    std::cout << "Listening for Whisper transcription from local mic."
+              << std::endl;
+  }
+
+  while (true) {
+    std::cout << "Capture loop start." << std::endl;
+    std::vector<int16_t> pcm_data = RecordLocalMicPcm(kMicRecordSeconds);
+    if (pcm_data.empty()) {
+      unitree::common::Sleep(1);
+      continue;
+    }
+    WriteWav("record.wav", pcm_data);
+    std::string transcript = TranscribeWithWhisper(pcm_data);
+    if (transcript.empty()) {
+      std::cout << "Whisper text: <empty>" << std::endl;
+      continue;
+    }
+    std::cout << "Whisper text: " << transcript << std::endl;
+    if (!is_test) {
+      ProcessCommandText(transcript);
+    }
+  }
 }
