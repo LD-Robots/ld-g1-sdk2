@@ -15,4 +15,7 @@ target_compile_features(g1_asr_arm_action PRIVATE cxx_std_17)
 target_compile_definitions(g1_asr_arm_action
   PRIVATE WHISPER_MODEL_PATH="${CMAKE_SOURCE_DIR}/thirdparty/whisper.cpp/models/ggml-base.en.bin"
 )
-target_link_libraries(g1_asr_arm_action unitree_sdk2 whisper)
+target_include_directories(g1_asr_arm_action
+  PRIVATE ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise/include
+)
+target_link_libraries(g1_asr_arm_action unitree_sdk2 whisper rnnoise)

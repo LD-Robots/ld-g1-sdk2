@@ -15,5 +15,18 @@ set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 add_subdirectory(thirdparty/whisper.cpp EXCLUDE_FROM_ALL)
 
+add_custom_target(rnnoise_build
+  COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise ./autogen.sh
+  COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise ./configure --disable-examples --disable-shared
+  COMMAND ${CMAKE_COMMAND} -E chdir ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise make
+  BYPRODUCTS ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise/.libs/librnnoise.a
+)
+
+add_library(rnnoise STATIC IMPORTED)
+set_target_properties(rnnoise PROPERTIES
+  IMPORTED_LOCATION ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise/.libs/librnnoise.a
+)
+add_dependencies(rnnoise rnnoise_build)
+
 add_subdirectory(audio_control)
 add_subdirectory(led_control)

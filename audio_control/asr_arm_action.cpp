@@ -12,11 +12,13 @@
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
 #include <unitree/robot/g1/arm/g1_arm_action_client.hpp>
+#include <rnnoise.h>
 #include <whisper.h>
 
 namespace {
 constexpr const char* kPrefix = "execute ";
-constexpr int kMicSampleRate = 16000;
+constexpr int kMicCaptureRate = 48000;
+constexpr int kMicWhisperRate = 16000;
 constexpr int kMicChannels = 1;
 constexpr int kMicBitsPerSample = 16;
 constexpr int kMicChunkSeconds = 1;
@@ -32,6 +34,7 @@ constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
 unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
 whisper_context* g_whisper_ctx = nullptr;
+DenoiseState* g_rnnoise_state = nullptr;
 
 std::string Normalize(const std::string& input) {
   std::string out;
@@ -173,7 +176,55 @@ std::string TranscribeWithWhisper(const std::vector<int16_t>& pcm_data) {
   return result;
 }
 
-void WriteWav(const std::string& path, const std::vector<int16_t>& pcm_data) {
+std::vector<int16_t> DenoisePcm48k(const std::vector<int16_t>& pcm_data) {
+  if (g_rnnoise_state == nullptr || pcm_data.empty()) {
+    return pcm_data;
+  }
+
+  constexpr int kFrameSize = 480;
+  std::vector<int16_t> out;
+  out.reserve(pcm_data.size());
+
+  size_t offset = 0;
+  while (offset < pcm_data.size()) {
+    float in_frame[kFrameSize] = {0.0f};
+    float out_frame[kFrameSize] = {0.0f};
+    size_t remaining = pcm_data.size() - offset;
+    size_t frame_count =
+        remaining < static_cast<size_t>(kFrameSize) ? remaining : kFrameSize;
+    for (size_t i = 0; i < frame_count; ++i) {
+      in_frame[i] = static_cast<float>(pcm_data[offset + i]) / 32768.0f;
+    }
+    rnnoise_process_frame(g_rnnoise_state, out_frame, in_frame);
+    for (size_t i = 0; i < frame_count; ++i) {
+      float v = out_frame[i];
+      if (v > 1.0f) {
+        v = 1.0f;
+      } else if (v < -1.0f) {
+        v = -1.0f;
+      }
+      out.push_back(static_cast<int16_t>(v * 32767.0f));
+    }
+    offset += frame_count;
+  }
+  return out;
+}
+
+std::vector<int16_t> DownsampleTo16k(const std::vector<int16_t>& pcm_data) {
+  if (pcm_data.empty()) {
+    return {};
+  }
+  std::vector<int16_t> out;
+  out.reserve(pcm_data.size() / 3);
+  for (size_t i = 0; i + 2 < pcm_data.size(); i += 3) {
+    out.push_back(pcm_data[i]);
+  }
+  return out;
+}
+
+void WriteWav(const std::string& path,
+              const std::vector<int16_t>& pcm_data,
+              int sample_rate_hz) {
   std::ofstream out(path, std::ios::binary);
   if (!out) {
     std::cout << "Failed to open " << path << " for writing." << std::endl;
@@ -184,7 +235,7 @@ void WriteWav(const std::string& path, const std::vector<int16_t>& pcm_data) {
   uint32_t riff_size = 36 + data_size;
   uint16_t audio_format = 1;
   uint16_t num_channels = kMicChannels;
-  uint32_t sample_rate = kMicSampleRate;
+  uint32_t sample_rate = static_cast<uint32_t>(sample_rate_hz);
   uint16_t bits_per_sample = kMicBitsPerSample;
   uint32_t byte_rate = sample_rate * num_channels * bits_per_sample / 8;
   uint16_t block_align = num_channels * bits_per_sample / 8;
@@ -264,7 +315,8 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
 
   while (captured_ms < kMicMaxRecordSeconds * 1000) {
     std::string cmd =
-        std::string("arecord -q -f S16_LE -r 16000 -c 1 -d ") +
+        std::string("arecord -q -f S16_LE -r ") +
+        std::to_string(kMicCaptureRate) + " -c 1 -d " +
         std::to_string(kMicChunkSeconds) + " -t raw " + kLocalMicChunkPcm;
     int ret = std::system(cmd.c_str());
     if (ret != 0) {
@@ -301,7 +353,6 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
     return {};
   }
 
-  WriteWav("record.wav", result);
   return result;
 }
 }  // namespace
@@ -329,6 +380,12 @@ int main(int argc, char const* argv[]) {
     return 1;
   }
   std::cout << "Whisper model loaded: " << model_path << std::endl;
+
+  g_rnnoise_state = rnnoise_create(nullptr);
+  if (g_rnnoise_state == nullptr) {
+    std::cout << "Failed to init RNNoise." << std::endl;
+    return 1;
+  }
 
   const bool is_test = (std::string(argv[1]) == "TEST");
   if (is_test) {
@@ -365,7 +422,13 @@ int main(int argc, char const* argv[]) {
       unitree::common::Sleep(1);
       continue;
     }
-    std::string transcript = TranscribeWithWhisper(pcm_data);
+    std::vector<int16_t> denoised = DenoisePcm48k(pcm_data);
+    std::vector<int16_t> whisper_pcm = DownsampleTo16k(denoised);
+    if (whisper_pcm.empty()) {
+      continue;
+    }
+    WriteWav("record.wav", whisper_pcm, kMicWhisperRate);
+    std::string transcript = TranscribeWithWhisper(whisper_pcm);
     if (transcript.empty()) {
       std::cout << "Whisper text: <empty>" << std::endl;
       continue;
