@@ -100,17 +100,17 @@ std::vector<std::string> SplitWords(const std::string& text) {
   return words;
 }
 
-bool ContainsAllKeywords(const std::string& haystack,
-                         const std::vector<std::string>& keywords) {
+bool ContainsAnyKeyword(const std::string& haystack,
+                        const std::vector<std::string>& keywords) {
   for (const auto& word : keywords) {
     if (word.size() <= 2) {
       continue;
     }
-    if (haystack.find(word) == std::string::npos) {
-      return false;
+    if (haystack.find(word) != std::string::npos) {
+      return true;
     }
   }
-  return true;
+  return false;
 }
 
 int MatchScore(const std::string& haystack,
@@ -209,13 +209,25 @@ void ProcessCommandText(const std::string& text) {
   for (const auto& entry : actions) {
     std::string action_norm = Normalize(entry.second);
     std::vector<std::string> keywords = SplitWords(action_norm);
-    if (ContainsAllKeywords(normalized, keywords)) {
-      int score = MatchScore(normalized, keywords);
-      if (score > best_score) {
-        best_score = score;
-        best_id = entry.first;
-        best_name = entry.second;
-      }
+    if (!ContainsAnyKeyword(normalized, keywords)) {
+      continue;
+    }
+    int score = MatchScore(normalized, keywords);
+    if (score > best_score) {
+      best_score = score;
+      best_id = entry.first;
+      best_name = entry.second;
+    }
+  }
+
+  if (best_id == -1) {
+    if (normalized.find("scratch") != std::string::npos) {
+      best_id = 19;
+      best_name = "scratch head";
+    }
+    if (normalized.find("clap") != std::string::npos) {
+      best_id = 17;
+      best_name = "clamp";
     }
   }
 
