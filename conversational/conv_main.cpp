@@ -17,6 +17,7 @@
 #include <unitree/common/time/time_tool.hpp>
 #include <unitree/robot/channel/channel_factory.hpp>
 #include <unitree/robot/g1/audio/g1_audio_client.hpp>
+#include <unitree/robot/g1/arm/g1_arm_action_client.hpp>
 #include <rnnoise.h>
 #include <whisper.h>
 
@@ -44,6 +45,7 @@ constexpr const char* kDefaultAlsaDevice = "default";
 std::string g_alsa_device = kDefaultAlsaDevice;
 
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
+unitree::robot::g1::G1ArmActionClient* g_arm_client = nullptr;
 whisper_context* g_whisper_ctx = nullptr;
 DenoiseState* g_rnnoise_state = nullptr;
 std::mutex g_queue_mutex;
@@ -316,9 +318,124 @@ bool ShouldSearch(const std::string& text) {
   return false;
 }
 
+std::vector<std::pair<int, std::string>> GetActionList() {
+  return {
+      {99, "release arm"},
+      {1, "turn back wave"},
+      {11, "blow kiss with both hands"},
+      {12, "blow kiss with left hand"},
+      {13, "blow kiss with right hand"},
+      {15, "both hands up"},
+      {17, "clamp"},
+      {18, "high five"},
+      {19, "hug"},
+      {20, "make heart with both hands"},
+      {21, "make heart with right hand"},
+      {22, "refuse"},
+      {23, "right hand up"},
+      {24, "ultraman ray"},
+      {25, "wave under head"},
+      {26, "wave above head"},
+      {27, "shake hand"},
+      {28, "box left hand win"},
+      {29, "box right hand win"},
+      {30, "box both hand win"},
+      {33, "right hand on heart"},
+      {34, "both hands up deviate right"},
+      {36, "both hands up deviate left"},
+  };
+}
+
+std::vector<std::string> SplitWords(const std::string& text) {
+  std::vector<std::string> words;
+  std::string current;
+  for (char ch : text) {
+    if (std::isspace(static_cast<unsigned char>(ch))) {
+      if (!current.empty()) {
+        words.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(ch);
+  }
+  if (!current.empty()) {
+    words.push_back(current);
+  }
+  return words;
+}
+
+int MatchScore(const std::string& haystack,
+               const std::vector<std::string>& keywords) {
+  int score = 0;
+  for (const auto& word : keywords) {
+    if (word.size() <= 2) continue;
+    if (haystack.find(word) != std::string::npos) {
+      score++;
+    }
+  }
+  return score;
+}
+
+int DetectAction(const std::string& text) {
+  std::string lower = text;
+  for (char& c : lower) c = std::tolower(c);
+
+  // Direct commands
+  if (lower.find("wave") != std::string::npos) return 26;
+  if (lower.find("hug") != std::string::npos) return 19;
+  if (lower.find("high five") != std::string::npos) return 18;
+  if (lower.find("shake hand") != std::string::npos) return 27;
+  if (lower.find("blow kiss") != std::string::npos) return 11;
+  if (lower.find("heart") != std::string::npos) return 20;
+  if (lower.find("refuse") != std::string::npos) return 22;
+  if (lower.find("ultraman") != std::string::npos) return 24;
+  if (lower.find("hands up") != std::string::npos) return 15;
+  if (lower.find("clap") != std::string::npos || lower.find("clamp") != std::string::npos) return 17;
+  if (lower.find("release") != std::string::npos) return 99;
+
+  // Match against action list
+  const auto actions = GetActionList();
+  int best_id = -1;
+  int best_score = 0;
+
+  for (const auto& entry : actions) {
+    std::string action_lower = entry.second;
+    for (char& c : action_lower) c = std::tolower(c);
+    std::vector<std::string> keywords = SplitWords(action_lower);
+    int score = MatchScore(lower, keywords);
+    if (score > best_score) {
+      best_score = score;
+      best_id = entry.first;
+    }
+  }
+
+  return best_score >= 2 ? best_id : -1;
+}
+
+bool ExecuteAction(int action_id) {
+  if (g_arm_client == nullptr) {
+    std::cout << "[Would execute action " << action_id << "]" << std::endl;
+    return false;
+  }
+
+  const auto actions = GetActionList();
+  std::string action_name = "unknown";
+  for (const auto& entry : actions) {
+    if (entry.first == action_id) {
+      action_name = entry.second;
+      break;
+    }
+  }
+
+  std::cout << "[Executing action: " << action_name << " (id=" << action_id << ")]" << std::endl;
+  int32_t ret = g_arm_client->ExecuteAction(action_id);
+  return ret == 0;
+}
+
 std::string CallOpenAI(const std::string& user_message) {
   if (g_groq_api_key.empty()) {
-    return "Error: OpenAI API key not set.";
+    return "Error: Groq API key not set.";
   }
 
   // Check if we should search the web
@@ -705,12 +822,18 @@ int main(int argc, char const* argv[]) {
   const bool is_test = (std::string(argv[1]) == "TEST");
 
   std::unique_ptr<unitree::robot::g1::AudioClient> audio_client;
+  std::unique_ptr<unitree::robot::g1::G1ArmActionClient> arm_client;
   if (!is_test) {
     unitree::robot::ChannelFactory::Instance()->Init(0, argv[1]);
     audio_client = std::make_unique<unitree::robot::g1::AudioClient>();
     audio_client->Init();
     audio_client->SetTimeout(10.0f);
     g_audio_client = audio_client.get();
+
+    arm_client = std::make_unique<unitree::robot::g1::G1ArmActionClient>();
+    arm_client->Init();
+    arm_client->SetTimeout(10.0f);
+    g_arm_client = arm_client.get();
   }
 
   std::cout << "\n========================================" << std::endl;
@@ -773,6 +896,22 @@ int main(int argc, char const* argv[]) {
       std::lock_guard<std::mutex> lock(g_history_mutex);
       g_conversation_history.clear();
       SpeakResponse("Conversation history cleared. Let's start fresh!");
+      continue;
+    }
+
+    // Check for action commands
+    int action_id = DetectAction(normalized);
+    if (action_id >= 0) {
+      const auto actions = GetActionList();
+      std::string action_name;
+      for (const auto& entry : actions) {
+        if (entry.first == action_id) {
+          action_name = entry.second;
+          break;
+        }
+      }
+      SpeakResponse("Okay, I'll " + action_name + " for you.");
+      ExecuteAction(action_id);
       continue;
     }
 
