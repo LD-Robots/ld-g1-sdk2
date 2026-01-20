@@ -342,7 +342,22 @@ std::vector<std::pair<int, std::string>> GetActionList() {
       {30, "box both hand win"},
       {33, "right hand on heart"},
       {34, "both hands up deviate right"},
-      {36, "both hands up deviate left"},
+      {36, "forward push"},
+  };
+}
+
+// Custom actions (cu nume, nu ID)
+std::vector<std::pair<std::string, std::vector<std::string>>> GetCustomActionList() {
+  return {
+      {"imbratisare", {"imbratisare", "embrace", "hug tight"}},
+      {"Waist_Drum_Dance", {"waist drum", "drum dance", "dance"}},
+      {"wave", {"wave custom", "wave dance"}},
+      {"Spin_discs", {"spin disc", "disc spin", "spin"}},
+      {"pupici", {"pupici", "kisses", "many kisses"}},
+      {"Scratch_head", {"scratch head", "scratch", "cap"}},
+      {"Throw_money", {"throw money", "money", "bani"}},
+      {"Tinut in mana", {"tinut in mana", "hold hand", "tine mana"}},
+      {"Portar", {"portar", "goalkeeper", "goalie"}},
   };
 }
 
@@ -377,13 +392,28 @@ int MatchScore(const std::string& haystack,
   return score;
 }
 
+std::string DetectCustomAction(const std::string& text) {
+  std::string lower = text;
+  for (char& c : lower) c = std::tolower(c);
+
+  const auto custom_actions = GetCustomActionList();
+  for (const auto& entry : custom_actions) {
+    for (const auto& trigger : entry.second) {
+      std::string trigger_lower = trigger;
+      for (char& c : trigger_lower) c = std::tolower(c);
+      if (lower.find(trigger_lower) != std::string::npos) {
+        return entry.first;
+      }
+    }
+  }
+  return "";
+}
+
 int DetectAction(const std::string& text) {
   std::string lower = text;
   for (char& c : lower) c = std::tolower(c);
 
   // Direct commands
-  if (lower.find("wave") != std::string::npos) return 26;
-  if (lower.find("hug") != std::string::npos) return 19;
   if (lower.find("high five") != std::string::npos) return 18;
   if (lower.find("shake hand") != std::string::npos) return 27;
   if (lower.find("blow kiss") != std::string::npos) return 11;
@@ -393,6 +423,10 @@ int DetectAction(const std::string& text) {
   if (lower.find("hands up") != std::string::npos) return 15;
   if (lower.find("clap") != std::string::npos || lower.find("clamp") != std::string::npos) return 17;
   if (lower.find("release") != std::string::npos) return 99;
+  if (lower.find("push") != std::string::npos) return 36;
+  // "wave" and "hug" moved to lower priority - custom actions may override
+  if (lower.find("wave") != std::string::npos && lower.find("custom") == std::string::npos) return 26;
+  if (lower.find("hug") != std::string::npos && lower.find("tight") == std::string::npos) return 19;
 
   // Match against action list
   const auto actions = GetActionList();
@@ -430,6 +464,17 @@ bool ExecuteAction(int action_id) {
 
   std::cout << "[Executing action: " << action_name << " (id=" << action_id << ")]" << std::endl;
   int32_t ret = g_arm_client->ExecuteAction(action_id);
+  return ret == 0;
+}
+
+bool ExecuteCustomAction(const std::string& action_name) {
+  if (g_arm_client == nullptr) {
+    std::cout << "[Would execute custom action: " << action_name << "]" << std::endl;
+    return false;
+  }
+
+  std::cout << "[Executing custom action: " << action_name << "]" << std::endl;
+  int32_t ret = g_arm_client->ExecuteAction(action_name);
   return ret == 0;
 }
 
@@ -899,7 +944,15 @@ int main(int argc, char const* argv[]) {
       continue;
     }
 
-    // Check for action commands
+    // Check for custom actions first
+    std::string custom_action = DetectCustomAction(normalized);
+    if (!custom_action.empty()) {
+      SpeakResponse("Okay, executing " + custom_action + ".");
+      ExecuteCustomAction(custom_action);
+      continue;
+    }
+
+    // Check for built-in action commands
     int action_id = DetectAction(normalized);
     if (action_id >= 0) {
       const auto actions = GetActionList();
