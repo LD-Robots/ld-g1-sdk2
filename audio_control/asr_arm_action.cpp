@@ -104,8 +104,8 @@ void ProcessCommandText(const std::string& text) {
       normalized.find("throw the money") != std::string::npos ||
       normalized.find("trow money") != std::string::npos ||
       normalized.find("trow the money") != std::string::npos) {
-    int32_t ret = g_client->ExecuteAction("throw_money");
-    std::cout << "Command: \"throw_money\" ret=" << ret << std::endl;
+    int32_t ret = g_client->ExecuteAction("Throw_money");
+    std::cout << "Command: \"Throw_money\" ret=" << ret << std::endl;
     return;
   }
 
