@@ -13,7 +13,7 @@ target_link_libraries(g1_audio_play_test unitree_sdk2)
 add_executable(g1_asr_arm_action asr_arm_action.cpp)
 target_compile_features(g1_asr_arm_action PRIVATE cxx_std_17)
 target_compile_definitions(g1_asr_arm_action
-  PRIVATE WHISPER_MODEL_PATH="${CMAKE_SOURCE_DIR}/thirdparty/whisper.cpp/models/ggml-base.en.bin"
+  PRIVATE WHISPER_MODEL_PATH="${CMAKE_SOURCE_DIR}/thirdparty/whisper.cpp/models/ggml-tiny.en.bin"
 )
 target_include_directories(g1_asr_arm_action
   PRIVATE ${CMAKE_SOURCE_DIR}/thirdparty/rnnoise/include

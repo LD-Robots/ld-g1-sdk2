@@ -26,13 +26,13 @@ constexpr int kMicWhisperRate = 16000;
 constexpr int kMicChannels = 1;
 constexpr int kMicBitsPerSample = 16;
 constexpr int kMicChunkSeconds = 1;
-constexpr int kMicMaxRecordSeconds = 3;
-constexpr int kMicSilenceStopMs = 400;
+constexpr int kMicMaxRecordSeconds = 2;
+constexpr int kMicSilenceStopMs = 300;
 constexpr float kMicVadThresholdStart = 0.0f;
 constexpr float kMicVadThresholdContinue = 0.0f;
 constexpr int kMicRmsThreshold = 1200;
 #ifndef WHISPER_MODEL_PATH
-#define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
+#define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-tiny.en.bin"
 #endif
 constexpr const char* kDefaultModelPath = WHISPER_MODEL_PATH;
 constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
@@ -367,7 +367,6 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
       break;
     }
     int rms = ComputeRms(denoised.denoised);
-    std::cout << "VAD=" << denoised.avg_vad << " RMS=" << rms << std::endl;
     if (!started) {
       if (denoised.avg_vad >= kMicVadThresholdStart &&
           rms >= kMicRmsThreshold) {
