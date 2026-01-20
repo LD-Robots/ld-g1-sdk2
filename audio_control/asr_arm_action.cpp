@@ -24,8 +24,9 @@ constexpr int kMicBitsPerSample = 16;
 constexpr int kMicChunkSeconds = 1;
 constexpr int kMicMaxRecordSeconds = 3;
 constexpr int kMicSilenceStopMs = 400;
-constexpr int kMicStartRmsThreshold = 600;
-constexpr float kMicVadThreshold = 0.85f;
+constexpr int kMicStartRmsThreshold = 250;
+constexpr float kMicVadThresholdStart = 0.0022f;
+constexpr float kMicVadThresholdContinue = 0.0018f;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
@@ -70,6 +71,15 @@ std::string TrimPunctuation(const std::string& input) {
     }
   }
   return input.substr(0, end);
+}
+
+bool IsCommandCandidate(const std::string& normalized) {
+  return normalized.find("execute ") != std::string::npos ||
+         normalized.find("hug") != std::string::npos ||
+         normalized.find("throw money") != std::string::npos ||
+         normalized.find("scratch head") != std::string::npos ||
+         normalized.find("stop") != std::string::npos ||
+         normalized.find("i miss you") != std::string::npos;
 }
 
 void ProcessCommandText(const std::string& text) {
@@ -348,22 +358,24 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
       break;
     }
     int rms = ComputeRms(denoised.denoised);
+    std::cout << "VAD=" << denoised.avg_vad << " RMS=" << rms << std::endl;
     if (!started) {
-      if (denoised.avg_vad >= kMicVadThreshold &&
-          rms >= kMicStartRmsThreshold) {
+      if (denoised.avg_vad >= kMicVadThresholdStart) {
         started = true;
+        std::cout << "Speech start detected." << std::endl;
         result.insert(result.end(), denoised.denoised.begin(),
                       denoised.denoised.end());
       }
     } else {
       result.insert(result.end(), denoised.denoised.begin(),
                     denoised.denoised.end());
-      if (denoised.avg_vad < kMicVadThreshold) {
+      if (denoised.avg_vad < kMicVadThresholdContinue) {
         silence_ms += kMicChunkSeconds * 1000;
       } else {
         silence_ms = 0;
       }
       if (silence_ms >= kMicSilenceStopMs) {
+        std::cout << "Speech end detected." << std::endl;
         break;
       }
     }
@@ -451,6 +463,12 @@ int main(int argc, char const* argv[]) {
     std::string transcript = TranscribeWithWhisper(whisper_pcm);
     if (transcript.empty()) {
       std::cout << "Whisper text: <empty>" << std::endl;
+      continue;
+    }
+    std::string normalized = Normalize(transcript);
+    normalized = TrimPunctuation(normalized);
+    if (!IsCommandCandidate(normalized)) {
+      std::cout << "Whisper text ignored: " << transcript << std::endl;
       continue;
     }
     std::cout << "Whisper text: " << transcript << std::endl;
