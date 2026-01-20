@@ -24,9 +24,9 @@ constexpr int kMicBitsPerSample = 16;
 constexpr int kMicChunkSeconds = 1;
 constexpr int kMicMaxRecordSeconds = 3;
 constexpr int kMicSilenceStopMs = 400;
-constexpr int kMicStartRmsThreshold = 250;
-constexpr float kMicVadThresholdStart = 0.0022f;
-constexpr float kMicVadThresholdContinue = 0.0018f;
+constexpr float kMicVadThresholdStart = 0.0f;
+constexpr float kMicVadThresholdContinue = 0.0f;
+constexpr int kMicRmsThreshold = 900;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
@@ -360,7 +360,8 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
     int rms = ComputeRms(denoised.denoised);
     std::cout << "VAD=" << denoised.avg_vad << " RMS=" << rms << std::endl;
     if (!started) {
-      if (denoised.avg_vad >= kMicVadThresholdStart) {
+      if (denoised.avg_vad >= kMicVadThresholdStart &&
+          rms >= kMicRmsThreshold) {
         started = true;
         std::cout << "Speech start detected." << std::endl;
         result.insert(result.end(), denoised.denoised.begin(),
@@ -369,7 +370,8 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
     } else {
       result.insert(result.end(), denoised.denoised.begin(),
                     denoised.denoised.end());
-      if (denoised.avg_vad < kMicVadThresholdContinue) {
+      if (denoised.avg_vad < kMicVadThresholdContinue ||
+          rms < kMicRmsThreshold) {
         silence_ms += kMicChunkSeconds * 1000;
       } else {
         silence_ms = 0;
