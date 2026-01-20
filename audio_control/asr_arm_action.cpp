@@ -26,7 +26,7 @@ constexpr int kMicMaxRecordSeconds = 3;
 constexpr int kMicSilenceStopMs = 400;
 constexpr float kMicVadThresholdStart = 0.0f;
 constexpr float kMicVadThresholdContinue = 0.0f;
-constexpr int kMicRmsThreshold = 900;
+constexpr int kMicRmsThreshold = 1200;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
