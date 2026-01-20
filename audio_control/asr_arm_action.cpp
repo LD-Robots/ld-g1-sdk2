@@ -578,7 +578,7 @@ int main(int argc, char const* argv[]) {
     if (whisper_pcm.empty()) {
       continue;
     }
-    WriteWav("record.wav", whisper_pcm, kMicWhisperRate);
+    // Skip WAV writing for faster turnaround.
     std::string transcript = TranscribeWithWhisper(whisper_pcm);
     if (transcript.empty()) {
       std::cout << "Whisper text: <empty>" << std::endl;
