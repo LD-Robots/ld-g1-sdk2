@@ -36,7 +36,7 @@ constexpr int kMicRmsThreshold = 1200;
 #endif
 constexpr const char* kDefaultModelPath = WHISPER_MODEL_PATH;
 constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
-constexpr const char* kAlsaDevice = "hw:0,0";
+constexpr const char* kAlsaDevice = "plughw:0,0";
 
 unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
