@@ -59,8 +59,8 @@ struct ChatMessage {
 std::vector<ChatMessage> g_conversation_history;
 std::mutex g_history_mutex;
 
-std::string g_openai_api_key;
-std::string g_openai_model = "gpt-4o-mini";
+std::string g_groq_api_key;
+std::string g_groq_model = "llama-3.3-70b-versatile";
 std::string g_system_prompt =
     "You are a friendly robot assistant named G1. You are helpful, concise, "
     "and speak naturally. Keep responses brief (1-2 sentences) since they "
@@ -317,7 +317,7 @@ bool ShouldSearch(const std::string& text) {
 }
 
 std::string CallOpenAI(const std::string& user_message) {
-  if (g_openai_api_key.empty()) {
+  if (g_groq_api_key.empty()) {
     return "Error: OpenAI API key not set.";
   }
 
@@ -347,7 +347,7 @@ std::string CallOpenAI(const std::string& user_message) {
 
   std::string messages_json = BuildMessagesJson(messages);
   std::ostringstream body;
-  body << "{\"model\":\"" << g_openai_model << "\",\"messages\":"
+  body << "{\"model\":\"" << g_groq_model << "\",\"messages\":"
        << messages_json << ",\"max_tokens\":150,\"temperature\":0.7}";
   std::string request_body = body.str();
 
@@ -359,11 +359,11 @@ std::string CallOpenAI(const std::string& user_message) {
   std::string response;
   struct curl_slist* headers = nullptr;
   headers = curl_slist_append(headers, "Content-Type: application/json");
-  std::string auth_header = "Authorization: Bearer " + g_openai_api_key;
+  std::string auth_header = "Authorization: Bearer " + g_groq_api_key;
   headers = curl_slist_append(headers, auth_header.c_str());
 
   curl_easy_setopt(curl, CURLOPT_URL,
-                   "https://api.openai.com/v1/chat/completions");
+                   "https://api.groq.com/openai/v1/chat/completions");
   curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
   curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
@@ -380,7 +380,7 @@ std::string CallOpenAI(const std::string& user_message) {
 
   std::string content = ExtractContentFromResponse(response);
   if (content.empty()) {
-    std::cout << "OpenAI raw response: " << response << std::endl;
+    std::cout << "Groq raw response: " << response << std::endl;
     // Try to extract error message from API response
     size_t err_pos = response.find("\"message\":");
     if (err_pos != std::string::npos) {
@@ -643,25 +643,26 @@ int main(int argc, char const* argv[]) {
   if (argc < 2) {
     std::cout << "Usage: conv_main [NetworkInterface(eth0)|TEST] [model_path]"
               << std::endl;
-    std::cout << "Environment: OPENAI_API_KEY must be set" << std::endl;
-    std::cout << "Optional: OPENAI_MODEL (default: gpt-4o-mini)" << std::endl;
+    std::cout << "Environment: GROQ_API_KEY must be set (free at https://console.groq.com/keys)" << std::endl;
+    std::cout << "Optional: GROQ_MODEL (default: llama-3.3-70b-versatile)" << std::endl;
     std::cout << "Optional: CONV_SYSTEM_PROMPT (custom system prompt)"
               << std::endl;
     std::cout << "Optional: ALSA_DEVICE (default: default)" << std::endl;
     return 1;
   }
 
-  const char* api_key_env = std::getenv("OPENAI_API_KEY");
+  const char* api_key_env = std::getenv("GROQ_API_KEY");
   if (api_key_env == nullptr || std::string(api_key_env).empty()) {
-    std::cout << "Error: OPENAI_API_KEY environment variable not set."
+    std::cout << "Error: GROQ_API_KEY environment variable not set."
               << std::endl;
+    std::cout << "Get free API key at: https://console.groq.com/keys" << std::endl;
     return 1;
   }
-  g_openai_api_key = api_key_env;
+  g_groq_api_key = api_key_env;
 
-  const char* model_env = std::getenv("OPENAI_MODEL");
+  const char* model_env = std::getenv("GROQ_MODEL");
   if (model_env != nullptr && std::string(model_env).length() > 0) {
-    g_openai_model = model_env;
+    g_groq_model = model_env;
   }
 
   const char* prompt_env = std::getenv("CONV_SYSTEM_PROMPT");
@@ -715,7 +716,7 @@ int main(int argc, char const* argv[]) {
   std::cout << "\n========================================" << std::endl;
   std::cout << "G1 Conversational Mode" << std::endl;
   std::cout << "========================================" << std::endl;
-  std::cout << "Model: " << g_openai_model << std::endl;
+  std::cout << "Model: " << g_groq_model << std::endl;
   std::cout << "Audio: " << g_alsa_device << std::endl;
   std::cout << "Mode: " << (is_test ? "TEST (no robot)" : "LIVE") << std::endl;
   std::cout << "Press Ctrl+C to exit." << std::endl;
