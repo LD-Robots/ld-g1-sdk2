@@ -36,6 +36,7 @@ constexpr int kMicRmsThreshold = 1200;
 #endif
 constexpr const char* kDefaultModelPath = WHISPER_MODEL_PATH;
 constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
+constexpr const char* kAlsaDevice = "hw:0,0";
 
 unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
@@ -348,7 +349,7 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
 
   while (captured_ms < kMicMaxRecordSeconds * 1000) {
     std::string cmd =
-        std::string("arecord -q -f S16_LE -r ") +
+        std::string("arecord -q -D ") + kAlsaDevice + " -f S16_LE -r " +
         std::to_string(kMicCaptureRate) + " -c 1 -d " +
         std::to_string(kMicChunkSeconds) + " -t raw " + kLocalMicChunkPcm;
     int ret = std::system(cmd.c_str());
