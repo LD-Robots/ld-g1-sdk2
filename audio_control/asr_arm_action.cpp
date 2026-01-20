@@ -20,9 +20,9 @@ constexpr int kMicSampleRate = 16000;
 constexpr int kMicChannels = 1;
 constexpr int kMicBitsPerSample = 16;
 constexpr int kMicChunkSeconds = 1;
-constexpr int kMicMaxRecordSeconds = 8;
-constexpr int kMicSilenceStopMs = 1200;
-constexpr int kMicStartRmsThreshold = 300;
+constexpr int kMicMaxRecordSeconds = 3;
+constexpr int kMicSilenceStopMs = 400;
+constexpr int kMicStartRmsThreshold = 600;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
