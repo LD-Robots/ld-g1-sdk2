@@ -20,7 +20,6 @@
 #include <whisper.h>
 
 namespace {
-constexpr const char* kPrefix = "execute ";
 constexpr int kMicCaptureRate = 48000;
 constexpr int kMicWhisperRate = 16000;
 constexpr int kMicChannels = 1;
@@ -32,7 +31,7 @@ constexpr float kMicVadThresholdStart = 0.0f;
 constexpr float kMicVadThresholdContinue = 0.0f;
 constexpr int kMicRmsThreshold = 1200;
 #ifndef WHISPER_MODEL_PATH
-#define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
+#define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-tiny.en.bin"
 #endif
 constexpr const char* kDefaultModelPath = WHISPER_MODEL_PATH;
 constexpr const char* kLocalMicChunkPcm = "/tmp/whisper_mic_chunk.pcm";
@@ -82,6 +81,80 @@ std::string TrimPunctuation(const std::string& input) {
   return input.substr(0, end);
 }
 
+std::vector<std::string> SplitWords(const std::string& text) {
+  std::vector<std::string> words;
+  std::string current;
+  for (char ch : text) {
+    if (std::isspace(static_cast<unsigned char>(ch))) {
+      if (!current.empty()) {
+        words.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(ch);
+  }
+  if (!current.empty()) {
+    words.push_back(current);
+  }
+  return words;
+}
+
+bool ContainsAllKeywords(const std::string& haystack,
+                         const std::vector<std::string>& keywords) {
+  for (const auto& word : keywords) {
+    if (word.size() <= 2) {
+      continue;
+    }
+    if (haystack.find(word) == std::string::npos) {
+      return false;
+    }
+  }
+  return true;
+}
+
+int MatchScore(const std::string& haystack,
+               const std::vector<std::string>& keywords) {
+  int score = 0;
+  for (const auto& word : keywords) {
+    if (word.size() <= 2) {
+      continue;
+    }
+    if (haystack.find(word) != std::string::npos) {
+      score++;
+    }
+  }
+  return score;
+}
+
+std::vector<std::pair<int, std::string>> GetActionList() {
+  return {
+      {99, "release arm"},
+      {1, "turn back wave"},
+      {11, "blow kiss with both hands"},
+      {12, "blow kiss with left hand"},
+      {13, "blow kiss with right hand"},
+      {15, "both hands up"},
+      {17, "clamp"},
+      {18, "high five"},
+      {19, "hug"},
+      {20, "make heart with both hands"},
+      {21, "make heart with right hand"},
+      {22, "refuse"},
+      {23, "right hand up"},
+      {24, "ultraman ray"},
+      {25, "wave under head"},
+      {26, "wave above head"},
+      {27, "shake hand"},
+      {28, "box left hand win"},
+      {29, "box right hand win"},
+      {30, "box both hand win"},
+      {33, "right hand on heart"},
+      {34, "both hands up deviate right"},
+      {36, "both hands up deviate left"},
+  };
+}
+
 void ProcessCommandText(const std::string& text) {
   if (g_client == nullptr) {
     return;
@@ -129,27 +202,31 @@ void ProcessCommandText(const std::string& text) {
     return;
   }
 
-  if (normalized.rfind(kPrefix, 0) != 0) {
+  const auto actions = GetActionList();
+  int best_id = -1;
+  int best_score = 0;
+  std::string best_name;
+  for (const auto& entry : actions) {
+    std::string action_norm = Normalize(entry.second);
+    std::vector<std::string> keywords = SplitWords(action_norm);
+    if (ContainsAllKeywords(normalized, keywords)) {
+      int score = MatchScore(normalized, keywords);
+      if (score > best_score) {
+        best_score = score;
+        best_id = entry.first;
+        best_name = entry.second;
+      }
+    }
+  }
+
+  if (best_id == -1) {
     std::cout << "Command ignored: " << text << std::endl;
     return;
   }
 
-  std::string action_name = normalized.substr(std::strlen(kPrefix));
-  action_name = TrimPunctuation(action_name);
-  if (action_name.empty()) {
-    std::cout << "Command missing action name." << std::endl;
-    return;
-  }
-
-  int32_t ret = 0;
-  auto it = g_client->action_map.find(action_name);
-  if (it != g_client->action_map.end()) {
-    ret = g_client->ExecuteAction(it->second);
-  } else {
-    ret = g_client->ExecuteAction(action_name);
-  }
-  std::cout << "Command: \"" << action_name << "\" ret=" << ret
-            << std::endl;
+  int32_t ret = g_client->ExecuteAction(best_id);
+  std::cout << "Command: \"" << best_name << "\" id=" << best_id
+            << " ret=" << ret << std::endl;
   return;
 }
 
