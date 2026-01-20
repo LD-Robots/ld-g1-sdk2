@@ -25,6 +25,7 @@ constexpr int kMicChunkSeconds = 1;
 constexpr int kMicMaxRecordSeconds = 3;
 constexpr int kMicSilenceStopMs = 400;
 constexpr int kMicStartRmsThreshold = 600;
+constexpr float kMicVadThreshold = 0.85f;
 #ifndef WHISPER_MODEL_PATH
 #define WHISPER_MODEL_PATH "thirdparty/whisper.cpp/models/ggml-base.en.bin"
 #endif
@@ -176,16 +177,23 @@ std::string TranscribeWithWhisper(const std::vector<int16_t>& pcm_data) {
   return result;
 }
 
-std::vector<int16_t> DenoisePcm48k(const std::vector<int16_t>& pcm_data) {
+struct RnnoiseChunkResult {
+  std::vector<int16_t> denoised;
+  float avg_vad = 0.0f;
+};
+
+RnnoiseChunkResult DenoiseChunk48k(const std::vector<int16_t>& pcm_data) {
+  RnnoiseChunkResult result;
   if (g_rnnoise_state == nullptr || pcm_data.empty()) {
-    return pcm_data;
+    return result;
   }
 
   constexpr int kFrameSize = 480;
-  std::vector<int16_t> out;
-  out.reserve(pcm_data.size());
+  result.denoised.reserve(pcm_data.size());
 
   size_t offset = 0;
+  float vad_sum = 0.0f;
+  int vad_frames = 0;
   while (offset < pcm_data.size()) {
     float in_frame[kFrameSize] = {0.0f};
     float out_frame[kFrameSize] = {0.0f};
@@ -195,7 +203,9 @@ std::vector<int16_t> DenoisePcm48k(const std::vector<int16_t>& pcm_data) {
     for (size_t i = 0; i < frame_count; ++i) {
       in_frame[i] = static_cast<float>(pcm_data[offset + i]) / 32768.0f;
     }
-    rnnoise_process_frame(g_rnnoise_state, out_frame, in_frame);
+    float vad = rnnoise_process_frame(g_rnnoise_state, out_frame, in_frame);
+    vad_sum += vad;
+    vad_frames++;
     for (size_t i = 0; i < frame_count; ++i) {
       float v = out_frame[i];
       if (v > 1.0f) {
@@ -203,11 +213,15 @@ std::vector<int16_t> DenoisePcm48k(const std::vector<int16_t>& pcm_data) {
       } else if (v < -1.0f) {
         v = -1.0f;
       }
-      out.push_back(static_cast<int16_t>(v * 32767.0f));
+      result.denoised.push_back(static_cast<int16_t>(v * 32767.0f));
     }
     offset += frame_count;
   }
-  return out;
+
+  if (vad_frames > 0) {
+    result.avg_vad = vad_sum / vad_frames;
+  }
+  return result;
 }
 
 std::vector<int16_t> DownsampleTo16k(const std::vector<int16_t>& pcm_data) {
@@ -329,15 +343,22 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
       break;
     }
 
-    int rms = ComputeRms(chunk);
+    RnnoiseChunkResult denoised = DenoiseChunk48k(chunk);
+    if (denoised.denoised.empty()) {
+      break;
+    }
+    int rms = ComputeRms(denoised.denoised);
     if (!started) {
-      if (rms >= kMicStartRmsThreshold) {
+      if (denoised.avg_vad >= kMicVadThreshold &&
+          rms >= kMicStartRmsThreshold) {
         started = true;
-        result.insert(result.end(), chunk.begin(), chunk.end());
+        result.insert(result.end(), denoised.denoised.begin(),
+                      denoised.denoised.end());
       }
     } else {
-      result.insert(result.end(), chunk.begin(), chunk.end());
-      if (rms < kMicStartRmsThreshold) {
+      result.insert(result.end(), denoised.denoised.begin(),
+                    denoised.denoised.end());
+      if (denoised.avg_vad < kMicVadThreshold) {
         silence_ms += kMicChunkSeconds * 1000;
       } else {
         silence_ms = 0;
@@ -422,8 +443,7 @@ int main(int argc, char const* argv[]) {
       unitree::common::Sleep(1);
       continue;
     }
-    std::vector<int16_t> denoised = DenoisePcm48k(pcm_data);
-    std::vector<int16_t> whisper_pcm = DownsampleTo16k(denoised);
+    std::vector<int16_t> whisper_pcm = DownsampleTo16k(pcm_data);
     if (whisper_pcm.empty()) {
       continue;
     }
