@@ -1,11 +1,15 @@
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <unitree/common/time/time_tool.hpp>
@@ -37,6 +41,10 @@ unitree::robot::g1::G1ArmActionClient* g_client = nullptr;
 unitree::robot::g1::AudioClient* g_audio_client = nullptr;
 whisper_context* g_whisper_ctx = nullptr;
 DenoiseState* g_rnnoise_state = nullptr;
+std::mutex g_queue_mutex;
+std::condition_variable g_queue_cv;
+std::deque<std::vector<int16_t>> g_pcm_queue;
+std::atomic<bool> g_capture_running(true);
 
 std::string Normalize(const std::string& input) {
   std::string out;
@@ -390,6 +398,21 @@ std::vector<int16_t> RecordLocalMicPcmDynamic() {
 
   return result;
 }
+
+void CaptureThread() {
+  while (g_capture_running.load()) {
+    std::vector<int16_t> pcm_data = RecordLocalMicPcmDynamic();
+    if (pcm_data.empty()) {
+      unitree::common::Sleep(1);
+      continue;
+    }
+    {
+      std::lock_guard<std::mutex> lock(g_queue_mutex);
+      g_pcm_queue.push_back(std::move(pcm_data));
+    }
+    g_queue_cv.notify_one();
+  }
+}
 }  // namespace
 
 int main(int argc, char const* argv[]) {
@@ -450,12 +473,16 @@ int main(int argc, char const* argv[]) {
               << std::endl;
   }
 
+  std::thread capture_thread(CaptureThread);
+  capture_thread.detach();
+
   while (true) {
-    std::cout << "Capture loop start." << std::endl;
-    std::vector<int16_t> pcm_data = RecordLocalMicPcmDynamic();
-    if (pcm_data.empty()) {
-      unitree::common::Sleep(1);
-      continue;
+    std::vector<int16_t> pcm_data;
+    {
+      std::unique_lock<std::mutex> lock(g_queue_mutex);
+      g_queue_cv.wait(lock, [] { return !g_pcm_queue.empty(); });
+      pcm_data = std::move(g_pcm_queue.front());
+      g_pcm_queue.pop_front();
     }
     std::vector<int16_t> whisper_pcm = DownsampleTo16k(pcm_data);
     if (whisper_pcm.empty()) {
