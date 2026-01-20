@@ -759,6 +759,15 @@ int main(int argc, char const* argv[]) {
       break;
     }
 
+    if (normalized == "stop" || normalized == "stop talking" ||
+        normalized == "shut up" || normalized == "be quiet") {
+      std::cout << "[Stopping...]" << std::endl;
+      if (g_audio_client != nullptr) {
+        g_audio_client->PlayStop(0);
+      }
+      continue;
+    }
+
     if (normalized == "clear history" || normalized == "reset conversation" ||
         normalized == "start over") {
       std::lock_guard<std::mutex> lock(g_history_mutex);
