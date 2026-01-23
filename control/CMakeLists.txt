@@ -5,3 +5,7 @@ target_compile_features(activate PUBLIC cxx_std_17)
 add_executable(set_mode set_mode.cpp)
 target_link_libraries(set_mode unitree_sdk2)
 target_compile_features(set_mode PUBLIC cxx_std_17)
+
+add_executable(g1_arm7_sdk_dds_no_waist g1_arm7_sdk_dds_no_waist.cpp)
+target_link_libraries(g1_arm7_sdk_dds_no_waist unitree_sdk2)
+target_compile_features(g1_arm7_sdk_dds_no_waist PUBLIC cxx_std_17)
