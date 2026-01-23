@@ -89,7 +89,8 @@ int main(int argc, char const *argv[]) {
         memcpy( &state_msg, s, sizeof( unitree_hg::msg::dds_::LowState_ ) );
   }, 1);
 
-  std::array<JointIndex, 14> arm_joints = {
+  // Include waist joints to maintain balance, even if we don't move them
+  std::array<JointIndex, 17> arm_joints = {
       JointIndex::kLeftShoulderPitch,  JointIndex::kLeftShoulderRoll,
       JointIndex::kLeftShoulderYaw,    JointIndex::kLeftElbow,
       JointIndex::kLeftWristRoll,       JointIndex::kLeftWristPitch,
@@ -97,7 +98,10 @@ int main(int argc, char const *argv[]) {
       JointIndex::kRightShoulderPitch, JointIndex::kRightShoulderRoll,
       JointIndex::kRightShoulderYaw,   JointIndex::kRightElbow,
       JointIndex::kRightWristRoll,      JointIndex::kRightWristPitch,
-      JointIndex::kRightWristYaw};
+      JointIndex::kRightWristYaw,
+      JointIndex::kWaistYaw,
+      JointIndex::kWaistRoll,
+      JointIndex::kWaistPitch};
 
   float weight = 0.f;
   float weight_rate = 0.2f;
@@ -115,24 +119,34 @@ int main(int argc, char const *argv[]) {
   auto sleep_time =
       std::chrono::milliseconds(static_cast<int>(control_dt / 0.001f));
 
-  std::array<float, 14> init_pos{0, 0, 0, 0, 0, 0, 0,
-                                 0, 0, 0, 0, 0, 0, 0};
+  std::array<float, 17> init_pos{0, 0, 0, 0, 0, 0, 0,
+                                 0, 0, 0, 0, 0, 0, 0,
+                                 0, 0, 0};  // waist: yaw, roll, pitch = 0
 
-  std::array<float, 14> target_pos = {0.f, kPi_2,  0.f, kPi_2, 0.f, 0.f, 0.f,
-                                      0.f, -kPi_2, 0.f, kPi_2, 0.f, 0.f, 0.f};
+  std::array<float, 17> target_pos = {0.f, kPi_2,  0.f, kPi_2, 0.f, 0.f, 0.f,
+                                      0.f, -kPi_2, 0.f, kPi_2, 0.f, 0.f, 0.f,
+                                      0.f, 0.f, 0.f};  // waist stays at 0
 
   // wait for init
   std::cout << "Press ENTER to init arms ...";
   std::cin.get();
 
   // get current joint position
-  std::array<float, 14> current_jpos{};
+  std::array<float, 17> current_jpos{};
   std::cout << "Current joint position: ";
   for (int i = 0; i < arm_joints.size(); ++i) {
     current_jpos.at(i) = state_msg.motor_state().at(arm_joints.at(i)).q();
     std::cout << current_jpos.at(i) << " ";
   }
   std::cout << std::endl;
+
+  // Keep waist at current position for stability
+  init_pos.at(14) = current_jpos.at(14);   // waist yaw
+  init_pos.at(15) = current_jpos.at(15);   // waist roll
+  init_pos.at(16) = current_jpos.at(16);   // waist pitch
+  target_pos.at(14) = current_jpos.at(14);
+  target_pos.at(15) = current_jpos.at(15);
+  target_pos.at(16) = current_jpos.at(16);
 
   // set init pos
   std::cout << "Initailizing arms ...";
@@ -173,7 +187,7 @@ int main(int argc, char const *argv[]) {
   float period = 5.f;
   int num_time_steps = static_cast<int>(period / control_dt);
 
-  std::array<float, 14> current_jpos_des{};
+  std::array<float, 17> current_jpos_des{};
 
   // lift arms up
   for (int i = 0; i < num_time_steps; ++i) {
